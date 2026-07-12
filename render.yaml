@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: prescripto-api
+    runtime: node
+    rootDir: backend
+    plan: free
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      # Non-secret config lives here.
+      - key: CURRENCY
+        value: INR
+      - key: CLOUDINARY_NAME
+        value: y1tcrknk
+      - key: CLOUDINARY_API_KEY
+        value: "764247452523591"
+      # Secrets: sync:false means Render prompts for the value in its secure UI
+      # and never stores it in this committed file.
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: CLOUDINARY_SECRET_KEY
+        sync: false
+      # Payment keys optional — server boots without them. Add later if needed.
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
