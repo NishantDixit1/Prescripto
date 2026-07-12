@@ -8,12 +8,21 @@ import { v2 as cloudinary } from 'cloudinary'
 import stripe from "stripe";
 import razorpay from 'razorpay';
 
-// Gateway Initialize
-const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY)
-const razorpayInstance = new razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET,
-})
+// Gateway Initialize (lazy: missing keys must not crash server boot)
+let _stripeInstance, _razorpayInstance
+
+const getStripe = () => {
+    if (!process.env.STRIPE_SECRET_KEY) throw new Error('Stripe is not configured')
+    return _stripeInstance ??= new stripe(process.env.STRIPE_SECRET_KEY)
+}
+
+const getRazorpay = () => {
+    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) throw new Error('Razorpay is not configured')
+    return _razorpayInstance ??= new razorpay({
+        key_id: process.env.RAZORPAY_KEY_ID,
+        key_secret: process.env.RAZORPAY_KEY_SECRET,
+    })
+}
 
 // API to register user
 const registerUser = async (req, res) => {
@@ -138,6 +147,10 @@ const bookAppointment = async (req, res) => {
         const { userId, docId, slotDate, slotTime } = req.body
         const docData = await doctorModel.findById(docId).select("-password")
 
+        if (!docData) {
+            return res.json({ success: false, message: 'Doctor Not Found' })
+        }
+
         if (!docData.available) {
             return res.json({ success: false, message: 'Doctor Not Available' })
         }
@@ -254,7 +267,7 @@ const paymentRazorpay = async (req, res) => {
         }
 
         // creation of an order
-        const order = await razorpayInstance.orders.create(options)
+        const order = await getRazorpay().orders.create(options)
 
         res.json({ success: true, order })
 
@@ -268,7 +281,7 @@ const paymentRazorpay = async (req, res) => {
 const verifyRazorpay = async (req, res) => {
     try {
         const { razorpay_order_id } = req.body
-        const orderInfo = await razorpayInstance.orders.fetch(razorpay_order_id)
+        const orderInfo = await getRazorpay().orders.fetch(razorpay_order_id)
 
         if (orderInfo.status === 'paid') {
             await appointmentModel.findByIdAndUpdate(orderInfo.receipt, { payment: true })
@@ -309,12 +322,15 @@ const paymentStripe = async (req, res) => {
             quantity: 1
         }]
 
-        const session = await stripeInstance.checkout.sessions.create({
+        const session = await getStripe().checkout.sessions.create({
             success_url: `${origin}/verify?success=true&appointmentId=${appointmentData._id}`,
             cancel_url: `${origin}/verify?success=false&appointmentId=${appointmentData._id}`,
             line_items: line_items,
             mode: 'payment',
         })
+
+        // store session id so payment can be verified server-side, not trusted from the client
+        await appointmentModel.findByIdAndUpdate(appointmentId, { stripeSessionId: session.id })
 
         res.json({ success: true, session_url: session.url });
 
@@ -329,7 +345,19 @@ const verifyStripe = async (req, res) => {
 
         const { appointmentId, success } = req.body
 
-        if (success === "true") {
+        if (success !== "true") {
+            return res.json({ success: false, message: 'Payment Failed' })
+        }
+
+        const appointmentData = await appointmentModel.findById(appointmentId)
+        if (!appointmentData || !appointmentData.stripeSessionId) {
+            return res.json({ success: false, message: 'Appointment or payment session not found' })
+        }
+
+        // verify the payment with Stripe instead of trusting the client-supplied flag
+        const session = await getStripe().checkout.sessions.retrieve(appointmentData.stripeSessionId)
+
+        if (session.payment_status === 'paid') {
             await appointmentModel.findByIdAndUpdate(appointmentId, { payment: true })
             return res.json({ success: true, message: 'Payment Successful' })
         }
